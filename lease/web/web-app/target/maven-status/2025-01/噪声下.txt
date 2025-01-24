@@ -1,0 +1,102 @@
+from qiskit import QuantumCircuit, transpile
+from qiskit_aer import AerSimulator
+from qiskit_aer.noise import NoiseModel, phase_damping_error
+import numpy as np
+
+
+def create_initial_sequence(m):
+    """
+    Step 1: Alice generates an initial photon sequence P, each randomly in state |0> or |+>
+    """
+    basis_states = ['0', '+']
+    sequence = np.random.choice(basis_states, size=m)
+    return sequence
+
+
+def apply_local_operations(sequence, secret):
+    """
+    Apply local unitary operations based on participants' secret bit strings
+    """
+    qc = QuantumCircuit(len(sequence))
+    for i, bit in enumerate(secret):
+        if sequence[i] == '0':
+            if bit == 1:
+                qc.x(i)  # U operation: flip |0> to |1>
+        else:  # sequence[i] == '+'
+            if bit == 1:
+                qc.z(i)  # U operation: flip |+> to |->
+    return qc
+
+
+def mqss_protocol(n, m, dephasing_prob=0.05):
+    """
+    Main function to simulate MQSS protocol under dephasing noise
+    """
+    # Create a noise model with dephasing noise
+    noise_model = NoiseModel()
+    phase_damping_error_1q = phase_damping_error(dephasing_prob)
+    noise_model.add_all_qubit_quantum_error(phase_damping_error_1q, ['measure'])
+
+    # Use a simulator with the noise model
+    simulator = AerSimulator(noise_model=noise_model)
+
+    # Step 1: Alice prepares the initial photon sequence
+    initial_sequence = create_initial_sequence(m)
+
+    # Randomly shuffle the sequence for transmission
+    shuffled_sequence = initial_sequence.copy()
+    np.random.shuffle(shuffled_sequence)
+
+    # Step 2: Participants apply their operations
+    secrets = []
+    sequence = shuffled_sequence
+    for _ in range(n):
+        secret = np.random.randint(0, 2, m)
+        secrets.append(secret)
+        qc = apply_local_operations(sequence, secret)
+        qc.measure_all()
+        transpiled_qc = transpile(qc, simulator)
+        result = simulator.run(transpiled_qc).result()
+        counts = result.get_counts()
+        measured_sequence = max(counts, key=counts.get)
+        sequence = list(measured_sequence)
+
+    # Step 3: Alice reorders the sequence
+    reordered_sequence = [sequence[shuffled_sequence.tolist().index(state)] for state in initial_sequence]
+
+    # Step 4: Error detection
+    sampled_positions = np.random.choice(m, m // 2, replace=False)
+    errors = sum(reordered_sequence[pos]!= initial_sequence[pos] for pos in sampled_positions)
+    error_rate = errors / len(sampled_positions)
+
+    return error_rate
+
+
+def main():
+    # Parameters
+    participant_numbers = range(2, 13)
+    # Generate more values for dephasing probs
+    dephasing_probs = np.linspace(0.0, 1.0, 51)
+    m = 8  # Number of qubits in the secret
+
+    # Store results
+    results = []
+    for n in participant_numbers:
+        error_rates = []
+        for dephasing_prob in dephasing_probs:
+            # Fix random seed for reproducibility
+            np.random.seed(42 + n + int(dephasing_prob * 100))
+            error_rate = mqss_protocol(n, m, dephasing_prob)
+            # Round error rate to three decimal places
+            error_rates.append(round(min(error_rate, 1.0), 3))
+        results.append(error_rates)
+
+    # Print results in table format
+    print("Noise rate \t" + "\t".join(map(str, participant_numbers)))
+    for i, dephasing_prob in enumerate(dephasing_probs):
+        row = [round(dephasing_prob, 3)] + [results[j][i] for j in range(len(participant_numbers))]
+        print("\t".join(map(str, row)))
+
+
+if __name__ == "__main__":
+    main()
